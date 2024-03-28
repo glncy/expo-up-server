@@ -1,0 +1,31 @@
+{
+  "name": "expo-up-server",
+  "version": "0.0.1",
+  "description": "Server Package for expo-up",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/glncy/expo-up-server.git"
+  },
+  "homepage": "https://github.com/glncy/expo-up-server",
+  "author": "glncy",
+  "scripts": {
+    "build": "rimraf dist && tsc && uglifyjs-folder dist -e -x .js -o dist"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "rimraf": "^5.0.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.3",
+    "uglifyjs-folder": "^3.3.0"
+  },
+  "dependencies": {
+    "crypto": "^1.0.1",
+    "form-data": "^4.0.0",
+    "jszip": "^3.10.1",
+    "mime": "^4.0.1"
+  }
+}
