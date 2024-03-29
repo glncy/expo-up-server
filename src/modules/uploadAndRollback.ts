@@ -405,15 +405,24 @@ export const uploadAndRollback = async ({
       }
 
       // upload files
-      for await (const unzippedFile of zipFiles) {
-        const arrayBuffer = await unzippedFile.async("arraybuffer");
-        const buffer = Buffer.from(arrayBuffer);
-        const file = bucket.file(
-          `${bucketPrefix}/${bundleTimestamp}/${unzippedFile.name}`
-        );
-        await file.save(buffer);
-      }
+      const promises: Promise<boolean>[] = [];
+      zipFiles.forEach(async (unzippedFile) => {
+        promises.push(new Promise(async (resolve, reject) => {
+          try {
+            const arrayBuffer = await unzippedFile.async("arraybuffer");
+            const buffer = Buffer.from(arrayBuffer);
+            const file = bucket.file(
+              `${bucketPrefix}/${bundleTimestamp}/${unzippedFile.name}`
+            );
+            await file.save(buffer);
+            resolve(true);
+          } catch (error) {
+            reject(error);
+          }
+        }));
+      });
 
+      await Promise.all(promises);
       return Response.json(
         {
           message: "Update uploaded successfully.",
