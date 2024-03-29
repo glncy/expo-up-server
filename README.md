@@ -29,6 +29,8 @@ yarn add expo-up-server
 
 ## Usage
 
+> See example repository: [sample-expo-up-server](https://github.com/glncy/sample-expo-up-server)
+
 For Firebase Storage, you need to initialize the Firebase Admin SDK first.
 
 Source: [https://firebase.google.com/docs/admin/setup#initialize_the_sdk_in_non-google_environments](https://firebase.google.com/docs/admin/setup#initialize_the_sdk_in_non-google_environments)
