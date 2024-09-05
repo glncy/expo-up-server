@@ -1,5 +1,8 @@
 import crypto, { BinaryToTextEncoding } from "crypto";
 import mime from "mime";
+import fs from "fs/promises";
+import path from "path";
+import { Dictionary, serializeDictionary } from "structured-headers";
 
 interface FirebaseFile {
   name: string;
@@ -32,6 +35,19 @@ export const getLatestBundleString = (files: FirebaseFile[]) => {
   )[0];
 
   return latestBundle;
+};
+
+export const getLatestBundleVersionNumber = (files: FirebaseFile[]) => {
+  const bundles = files
+    .map((file) => {
+      const name = file.name.split("/");
+      const timestamp = name[3];
+      return timestamp;
+    })
+    .filter((file) => file)
+    // remove duplicates
+    .filter((value, index, self) => self.indexOf(value) === index);
+  return bundles.length;
 };
 
 export const getListOfBundles = (files: FirebaseFile[]) => {
@@ -155,4 +171,71 @@ export const getBase64URLEncoding = (base64EncodedString: string) => {
 
 export const generateToken = (length: number = 16) => {
   return crypto.randomBytes(length).toString("hex");
+};
+
+export const getPrivateKeyAsync = async () => {
+  const privateKeyPath = process.env.EXPO_UP_PRIVATE_KEY_PATH;
+  const privateKeyValue = process.env.EXPO_UP_PRIVATE_KEY_VALUE;
+
+  if (privateKeyValue) {
+    return privateKeyValue;
+  } else if (privateKeyPath) {
+    const pemBuffer = await fs.readFile(path.resolve(privateKeyPath));
+    return pemBuffer.toString("utf8");
+  }
+
+  return null;
+};
+
+export const signRSASHA256 = (data: string, privateKey: string) => {
+  const sign = crypto.createSign("RSA-SHA256");
+  sign.update(data, "utf8");
+  sign.end();
+  return sign.sign(privateKey, "base64");
+};
+
+export const convertToDictionaryItemsRepresentation = (obj: {
+  [key: string]: string;
+}): Dictionary => {
+  return new Map(
+    Object.entries(obj).map(([k, v]) => {
+      return [k, [v, new Map()]];
+    })
+  );
+};
+
+export const generateSignature = ({
+  valueString,
+  privateKey,
+  keyId,
+}: {
+  valueString: string;
+  privateKey: string;
+  keyId?: string;
+}) => {
+  const hashSignature = signRSASHA256(valueString, privateKey);
+  const dictionary = convertToDictionaryItemsRepresentation({
+    sig: hashSignature,
+    keyid: keyId ?? "main",
+  });
+  return serializeDictionary(dictionary);
+};
+
+export const generateAuthKeyPairs = () => {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    publicKeyEncoding: {
+      type: "spki",
+      format: "pem",
+    },
+    privateKeyEncoding: {
+      type: "pkcs8",
+      format: "pem",
+    },
+  });
+
+  return {
+    privateKey,
+    publicKey,
+  };
 };

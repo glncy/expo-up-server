@@ -7,8 +7,10 @@ import {
   getTypeOfUpdate as initialGetTypeOfUpdate,
   getMetadataAsync,
   UnauthorizedError,
+  getLatestBundleVersionNumber,
 } from "../helpers.js";
 import JSZip from "jszip";
+import crypto from "crypto";
 
 export const uploadAndRollback = async ({
   req,
@@ -17,6 +19,7 @@ export const uploadAndRollback = async ({
   rollbackEmbeddedFileName,
   rollbackFileName,
   authFileName,
+  privateKeyFileName,
 }: {
   req: Request;
   bucket: any;
@@ -24,6 +27,7 @@ export const uploadAndRollback = async ({
   rollbackEmbeddedFileName: string;
   rollbackFileName: string;
   authFileName: string;
+  privateKeyFileName: string;
 }) => {
   try {
     const getTypeOfUpdate = (files: string[]) => {
@@ -36,13 +40,46 @@ export const uploadAndRollback = async ({
     const authorization = req.headers.get("authorization");
     if (!authorization) throw new UnauthorizedError();
 
-    const [_bearer, token] = authorization.split(" ");
-    if (!token) throw new UnauthorizedError();
+    const [typeOrText, token] = authorization.split(" ");
+    if (!typeOrText) throw new UnauthorizedError();
+    if (typeOrText === "Bearer" && !token) throw new UnauthorizedError();
 
-    const authFile = bucket.file(`${storageRootFolder}/${authFileName}`);
-    const [authFileDownload] = await authFile.download();
-    const authFileContent: string = authFileDownload.toString();
-    if (authFileContent !== token) throw new UnauthorizedError();
+    // TODO: validate the decrypted object
+    // let decryptedObj: {
+    //   buildTimestamp: number;
+    //   platform: 'ios' | 'android';
+    //   runtimeVersion: string;
+    // } | null = null;
+    if (typeOrText === "Bearer") {
+      const authFile = bucket.file(`${storageRootFolder}/${authFileName}`);
+      const [authFileDownload] = await authFile.download();
+      const authFileContent: string = authFileDownload.toString();
+      if (authFileContent !== token) throw new UnauthorizedError();
+    } else {
+      // if not a bearer token, its a encrypted token
+      // validate using the private key
+
+      // get the private key
+      const bucketPrefix = `${storageRootFolder}`;
+      const privateKeyFile = bucket.file(
+        `${bucketPrefix}/${privateKeyFileName}`
+      );
+      const [privateKeyFileDownload] = await privateKeyFile.download();
+      const privateKey = privateKeyFileDownload.toString();
+
+      // validate and decrypt text
+      try {
+        const result = crypto
+          .privateDecrypt(privateKey, Buffer.from(typeOrText, "base64"))
+          .toString("utf-8");
+        console.log("Build Info: ", JSON.parse(result));
+        // TODO: validate the decrypted object
+        // decryptedObj = JSON.parse(result);
+      } catch (error) {
+        console.error(error);
+        throw new UnauthorizedError();
+      }
+    }
 
     const contentType = req.headers.get("content-type");
     if (contentType === "application/json") {
@@ -50,7 +87,7 @@ export const uploadAndRollback = async ({
         const body = await req.json();
         const rollbackType: "embedded" | "previous" | undefined =
           body.rollbackType;
-        const { updatesKey, platform, runtimeVersion } = body;
+        const { updatesKey, platform, runtimeVersion, projectName } = body;
 
         if (!updatesKey || !platform || !runtimeVersion || !rollbackType) {
           return Response.json(
@@ -74,12 +111,34 @@ export const uploadAndRollback = async ({
           );
         }
 
+        let bucketPrefix: string;
+        if (projectName) {
+          // validate if projectName don't have white spaces or special characters
+          if (!/^[a-zA-Z0-9-]*$/.test(projectName as string)) {
+            return Response.json(
+              {
+                error: "Invalid project name.",
+              },
+              {
+                status: 400,
+              }
+            );
+          }
+          bucketPrefix = `${storageRootFolder}/${projectName}-${updatesKey}-${platform}/${runtimeVersion}`;
+        } else {
+          bucketPrefix = `${storageRootFolder}/${updatesKey}-${platform}/${runtimeVersion}`;
+        }
+
         const timestamp = new Date().getTime();
-        const bucketPrefix = `${storageRootFolder}/${updatesKey}-${platform}/${runtimeVersion}`;
         const [result] = await bucket.getFiles({
           prefix: bucketPrefix,
           autoPaginate: false,
         });
+
+        if (result.length === 0) {
+          throw new NoPreviousUpdateError();
+        }
+
         const latestBundleString = getLatestBundleString(result);
         if (!latestBundleString) {
           throw new NoPreviousUpdateError();
@@ -289,6 +348,7 @@ export const uploadAndRollback = async ({
       const platform = formData.get("platform");
       const runtimeVersion = formData.get("runtimeVersion");
       const bundleTimestamp = formData.get("bundleTimestamp");
+      const projectName = formData.get("projectName");
 
       if (
         !file ||
@@ -307,7 +367,23 @@ export const uploadAndRollback = async ({
         );
       }
 
-      const bucketPrefix = `${storageRootFolder}/${updatesKey}-${platform}/${runtimeVersion}`;
+      let bucketPrefix: string;
+      if (projectName) {
+        // validate if projectName don't have white spaces or special characters
+        if (!/^[a-zA-Z0-9-]*$/.test(projectName as string)) {
+          return Response.json(
+            {
+              error: "Invalid project name.",
+            },
+            {
+              status: 400,
+            }
+          );
+        }
+        bucketPrefix = `${storageRootFolder}/${projectName}-${updatesKey}-${platform}/${runtimeVersion}`;
+      } else {
+        bucketPrefix = `${storageRootFolder}/${updatesKey}-${platform}/${runtimeVersion}`;
+      }
       const fileArrayBuffer =
         typeof file !== "string" ? await file.arrayBuffer() : null;
 
@@ -338,6 +414,8 @@ export const uploadAndRollback = async ({
         prefix: bucketPrefix,
         autoPaginate: false,
       });
+
+      let latestBundleVersionNumber = 0;
 
       if (result.length !== 0) {
         const latestBundleString = getLatestBundleString(result);
@@ -402,7 +480,12 @@ export const uploadAndRollback = async ({
             );
           }
         }
+
+        latestBundleVersionNumber = getLatestBundleVersionNumber(result);
       }
+
+      // set new version number
+      const newVersionNumber = latestBundleVersionNumber + 1;
 
       // upload files
       const promises: Promise<boolean>[] = [];
@@ -412,7 +495,7 @@ export const uploadAndRollback = async ({
             const arrayBuffer = await unzippedFile.async("arraybuffer");
             const buffer = Buffer.from(arrayBuffer);
             const file = bucket.file(
-              `${bucketPrefix}/${bundleTimestamp}/${unzippedFile.name}`
+              `${bucketPrefix}/${bundleTimestamp}-v${newVersionNumber}/${unzippedFile.name}`
             );
             await file.save(buffer);
             resolve(true);
@@ -436,7 +519,7 @@ export const uploadAndRollback = async ({
     if (error instanceof UnauthorizedError) {
       return Response.json(
         {
-          error: "Unauthorized token. Please check and provide a valid token.",
+          error: "Unauthorized authentication. Please check and provide a valid authentication.",
         },
         {
           status: 401,

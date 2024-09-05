@@ -1,5 +1,10 @@
 import { generateToken, getFilesArrayString } from "../helpers.js";
 
+/**
+ * @deprecated
+ *
+ * This method will be removed in the future. Please use `downloadPublicKeyPem` instead.
+ */
 export const initializeAuthFile = async ({
   bucket,
   authFileName,
