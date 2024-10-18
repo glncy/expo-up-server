@@ -1,6 +1,7 @@
 import { uploadAndRollback as initUploadAndRollback } from "./modules/uploadAndRollback.js";
 import { sendUpdate as initSendUpdate } from "./modules/sendUpdate.js";
 import { initializeAuthFile as initInitializeAuthFile } from "./modules/initializeAuthFile.js";
+import { updatePrivateKeyFile as initUpdatePrivateKeyFile } from "./modules/updatePrivateKeyFile.js";
 
 import {
   defaultAuthFileName,
@@ -29,6 +30,10 @@ interface ExpoUpReturn {
    * This method will help you to download the public key pem file from the storage server.
    */
   downloadPublicKeyPem: () => void;
+  /**
+   * This method will help you to update the private key file for code signing.
+   */
+  updatePrivateKeyFile: (req: Request) => void;
 }
 
 type ExpoUpProps = {
@@ -83,6 +88,14 @@ export const ExpoUp: ExpoUpType = ({
         publicKeyFileName,
         privateKeyFileName,
         storageRootFolder,
+      }),
+    updatePrivateKeyFile: (req: Request) =>
+      initUpdatePrivateKeyFile({
+        req,
+        bucket,
+        storageRootFolder,
+        privateKeyFileName,
+        authFileName,
       }),
   };
 };

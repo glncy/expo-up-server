@@ -124,7 +124,7 @@ export const createHash = (
   hashingAlgorithm: string,
   encoding: BinaryToTextEncoding
 ) => {
-  return crypto.createHash(hashingAlgorithm).update(file).digest(encoding);
+  return crypto.createHash(hashingAlgorithm).update(new Uint8Array(file)).digest(encoding);
 };
 
 export const convertSHA256HashToUUID = (value: string) => {
@@ -174,6 +174,7 @@ export const generateToken = (length: number = 16) => {
 };
 
 export const getPrivateKeyAsync = async () => {
+  // get private key based from project name and/or update key
   const privateKeyPath = process.env.EXPO_UP_PRIVATE_KEY_PATH;
   const privateKeyValue = process.env.EXPO_UP_PRIVATE_KEY_VALUE;
 
@@ -239,3 +240,62 @@ export const generateAuthKeyPairs = () => {
     publicKey,
   };
 };
+
+export const authenticate = async ({
+  req,
+  bucket,
+  storageRootFolder,
+  authFileName,
+  privateKeyFileName,
+}: {
+  req: Request;
+  bucket: any;
+  storageRootFolder: string;
+  authFileName: string;
+  privateKeyFileName: string;
+}) => {
+  const authorization = req.headers.get("authorization");
+  if (!authorization) throw new UnauthorizedError();
+
+  // typeOrText is either "Bearer" or the encrypted text
+  const [typeOrText, token] = authorization.split(" ");
+  if (!typeOrText) throw new UnauthorizedError();
+  if (typeOrText === "Bearer" && !token) throw new UnauthorizedError();
+
+  // TODO: validate the decrypted object
+  // let decryptedObj: {
+  //   buildTimestamp: number;
+  //   platform: 'ios' | 'android';
+  //   runtimeVersion: string;
+  // } | null = null;
+  if (typeOrText === "Bearer") {
+    const authFile = bucket.file(`${storageRootFolder}/${authFileName}`);
+    const [authFileDownload] = await authFile.download();
+    const authFileContent: string = authFileDownload.toString();
+    if (authFileContent !== token) throw new UnauthorizedError();
+  } else {
+    // if not a bearer token, its a encrypted token
+    // validate using the private key
+
+    // get the private key
+    const bucketPrefix = `${storageRootFolder}`;
+    const privateKeyFile = bucket.file(
+      `${bucketPrefix}/${privateKeyFileName}`
+    );
+    const [privateKeyFileDownload] = await privateKeyFile.download();
+    const privateKey = privateKeyFileDownload.toString();
+
+    // validate and decrypt text
+    try {
+      const result = crypto
+        .privateDecrypt(privateKey, new Uint8Array(Buffer.from(typeOrText, "base64")))
+        .toString("utf-8");
+      console.log("Auth Info: ", JSON.parse(result));
+      // TODO: validate the decrypted object
+      // decryptedObj = JSON.parse(result);
+    } catch (error) {
+      console.error(error);
+      throw new UnauthorizedError();
+    }
+  }
+}

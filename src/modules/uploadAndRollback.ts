@@ -8,6 +8,7 @@ import {
   getMetadataAsync,
   UnauthorizedError,
   getLatestBundleVersionNumber,
+  authenticate,
 } from "../helpers.js";
 import JSZip from "jszip";
 import crypto from "crypto";
@@ -37,49 +38,13 @@ export const uploadAndRollback = async ({
       });
     };
 
-    const authorization = req.headers.get("authorization");
-    if (!authorization) throw new UnauthorizedError();
-
-    const [typeOrText, token] = authorization.split(" ");
-    if (!typeOrText) throw new UnauthorizedError();
-    if (typeOrText === "Bearer" && !token) throw new UnauthorizedError();
-
-    // TODO: validate the decrypted object
-    // let decryptedObj: {
-    //   buildTimestamp: number;
-    //   platform: 'ios' | 'android';
-    //   runtimeVersion: string;
-    // } | null = null;
-    if (typeOrText === "Bearer") {
-      const authFile = bucket.file(`${storageRootFolder}/${authFileName}`);
-      const [authFileDownload] = await authFile.download();
-      const authFileContent: string = authFileDownload.toString();
-      if (authFileContent !== token) throw new UnauthorizedError();
-    } else {
-      // if not a bearer token, its a encrypted token
-      // validate using the private key
-
-      // get the private key
-      const bucketPrefix = `${storageRootFolder}`;
-      const privateKeyFile = bucket.file(
-        `${bucketPrefix}/${privateKeyFileName}`
-      );
-      const [privateKeyFileDownload] = await privateKeyFile.download();
-      const privateKey = privateKeyFileDownload.toString();
-
-      // validate and decrypt text
-      try {
-        const result = crypto
-          .privateDecrypt(privateKey, Buffer.from(typeOrText, "base64"))
-          .toString("utf-8");
-        console.log("Build Info: ", JSON.parse(result));
-        // TODO: validate the decrypted object
-        // decryptedObj = JSON.parse(result);
-      } catch (error) {
-        console.error(error);
-        throw new UnauthorizedError();
-      }
-    }
+    await authenticate({
+      req,
+      bucket,
+      storageRootFolder,
+      authFileName,
+      privateKeyFileName,
+    });
 
     const contentType = req.headers.get("content-type");
     if (contentType === "application/json") {
