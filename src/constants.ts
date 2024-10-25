@@ -4,3 +4,5 @@ export const defaultRollbackFileName = "rollback";
 export const defaultAuthFileName = "AUTH_TOKEN";
 export const defaultPublicKeyFileName = "expo_up_public_key.pem";
 export const defaultPrivateKeyFileName = "expo_up_private_key.pem";
+export const defaultPrivateKeysFolder = "private_keys";
+export const defaultPrivateKeySuffix = "-private-key.pem";

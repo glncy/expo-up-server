@@ -6,12 +6,16 @@ export const updatePrivateKeyFile = async ({
   storageRootFolder,
   privateKeyFileName,
   authFileName,
+  privateKeysFolder,
+  privateKeySuffix,
 }: {
   req: Request;
   bucket: any;
   storageRootFolder: string;
   privateKeyFileName: string;
   authFileName: string;
+  privateKeysFolder: string;
+  privateKeySuffix: string;
 }) => {
   try {
     await authenticate({
@@ -35,8 +39,8 @@ export const updatePrivateKeyFile = async ({
       );
     }
 
-    const bucketPrefix = `${storageRootFolder}/PROJECT_KEYS`;
-    let projectKeyFile: string;
+    const bucketPrefix = `${storageRootFolder}/${privateKeysFolder}`;
+    let privateKeyFile: string;
     if (projectName) {
       // validate if projectName don't have white spaces or special characters
       if (!/^[a-zA-Z0-9-]*$/.test(projectName as string)) {
@@ -49,19 +53,20 @@ export const updatePrivateKeyFile = async ({
           }
         );
       }
-      projectKeyFile = `${projectName}-${updatesKey}-private-key.pem`;
+      privateKeyFile = `${projectName}-${updatesKey}${privateKeySuffix}`;
     } else {
-      projectKeyFile = `${updatesKey}-private-key.pem`;
+      privateKeyFile = `${updatesKey}${privateKeySuffix}`;
     }
 
-    const file = bucket.file(`${bucketPrefix}/${projectKeyFile}`);
+    const file = bucket.file(`${bucketPrefix}/${privateKeyFile}`);
 
     // validate if the file exists
     const [fileExists] = await file.exists();
     if (fileExists && !overwrite) {
       return Response.json(
         {
-          error: "Private key file already exists. Use overwrite flag to update the file.",
+          error:
+            "Private key file already exists. Use overwrite flag to update the file.",
         },
         {
           status: 404,
@@ -72,7 +77,7 @@ export const updatePrivateKeyFile = async ({
     await file.save(key, {
       contentType: "text/plain",
     });
-    
+
     return Response.json(
       {
         message: "Private key file updated successfully.",
@@ -85,7 +90,8 @@ export const updatePrivateKeyFile = async ({
     if (error instanceof UnauthorizedError) {
       return Response.json(
         {
-          error: "Unauthorized authentication. Please check and provide a valid authentication.",
+          error:
+            "Unauthorized authentication. Please check and provide a valid authentication.",
         },
         {
           status: 401,

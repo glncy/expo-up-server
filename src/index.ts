@@ -2,6 +2,7 @@ import { uploadAndRollback as initUploadAndRollback } from "./modules/uploadAndR
 import { sendUpdate as initSendUpdate } from "./modules/sendUpdate.js";
 import { initializeAuthFile as initInitializeAuthFile } from "./modules/initializeAuthFile.js";
 import { updatePrivateKeyFile as initUpdatePrivateKeyFile } from "./modules/updatePrivateKeyFile.js";
+import { downloadPublicKeyPem as initDownloadPublicKeyPem } from "./modules/downloadPublicKeyPem.js";
 
 import {
   defaultAuthFileName,
@@ -10,8 +11,9 @@ import {
   defaultRollbackEmbeddedFileName,
   defaultRollbackFileName,
   defaultStorageRootFolder,
+  defaultPrivateKeysFolder,
+  defaultPrivateKeySuffix,
 } from "./constants.js";
-import { downloadPublicKeyPem as initDownloadPublicKeyPem } from "./modules/downloadPublicKeyPem.js";
 
 interface ExpoUpReturn {
   /**
@@ -44,6 +46,8 @@ type ExpoUpProps = {
   authFileName?: string;
   publicKeyFileName?: string;
   privateKeyFileName?: string;
+  privateKeysFolder?: string;
+  privateKeySuffix?: string;
 };
 
 type ExpoUpType = (options: ExpoUpProps) => ExpoUpReturn;
@@ -56,6 +60,8 @@ export const ExpoUp: ExpoUpType = ({
   authFileName = defaultAuthFileName,
   publicKeyFileName = defaultPublicKeyFileName,
   privateKeyFileName = defaultPrivateKeyFileName,
+  privateKeysFolder = defaultPrivateKeysFolder,
+  privateKeySuffix = defaultPrivateKeySuffix,
 }) => {
   return {
     uploadAndRollback: (req: Request) =>
@@ -75,6 +81,8 @@ export const ExpoUp: ExpoUpType = ({
         storageRootFolder,
         rollbackEmbeddedFileName,
         rollbackFileName,
+        privateKeysFolder,
+        privateKeySuffix,
       }),
     initializeAuthFile: () =>
       initInitializeAuthFile({
@@ -96,6 +104,8 @@ export const ExpoUp: ExpoUpType = ({
         storageRootFolder,
         privateKeyFileName,
         authFileName,
+        privateKeysFolder,
+        privateKeySuffix,
       }),
   };
 };

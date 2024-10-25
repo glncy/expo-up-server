@@ -9,9 +9,10 @@ import {
   UnauthorizedError,
   getLatestBundleVersionNumber,
   authenticate,
+  getBase64URLEncoding,
+  createHash,
 } from "../helpers.js";
 import JSZip from "jszip";
-import crypto from "crypto";
 
 export const uploadAndRollback = async ({
   req,
@@ -454,23 +455,46 @@ export const uploadAndRollback = async ({
 
       // upload files
       const promises: Promise<boolean>[] = [];
+      const hashInfo: {
+        [key: string]: {
+          hash: string;
+          key: string;
+        };
+      } = {};
       zipFiles.forEach(async (unzippedFile) => {
-        promises.push(new Promise(async (resolve, reject) => {
-          try {
-            const arrayBuffer = await unzippedFile.async("arraybuffer");
-            const buffer = Buffer.from(arrayBuffer);
-            const file = bucket.file(
-              `${bucketPrefix}/${bundleTimestamp}-v${newVersionNumber}/${unzippedFile.name}`
-            );
-            await file.save(buffer);
-            resolve(true);
-          } catch (error) {
-            reject(error);
-          }
-        }));
+        promises.push(
+          new Promise(async (resolve, reject) => {
+            try {
+              const arrayBuffer = await unzippedFile.async("arraybuffer");
+              const buffer = Buffer.from(arrayBuffer);
+              const file = bucket.file(
+                `${bucketPrefix}/${bundleTimestamp}-v${newVersionNumber}/${unzippedFile.name}`
+              );
+              const key = createHash(buffer, "md5", "hex");
+              const assetHash = getBase64URLEncoding(
+                createHash(buffer, "sha256", "base64")
+              );
+              hashInfo[unzippedFile.name] = {
+                hash: assetHash,
+                key,
+              };
+              await file.save(buffer);
+              resolve(true);
+            } catch (error) {
+              reject(error);
+            }
+          })
+        );
       });
 
       await Promise.all(promises);
+      // save hash info
+      const hashInfoFile = bucket.file(
+        `${bucketPrefix}/${bundleTimestamp}-v${newVersionNumber}/hashInfo.json`
+      );
+      await hashInfoFile.save(JSON.stringify(hashInfo), {
+        contentType: "application/json",
+      });
       return Response.json(
         {
           message: "Update uploaded successfully.",
@@ -484,7 +508,8 @@ export const uploadAndRollback = async ({
     if (error instanceof UnauthorizedError) {
       return Response.json(
         {
-          error: "Unauthorized authentication. Please check and provide a valid authentication.",
+          error:
+            "Unauthorized authentication. Please check and provide a valid authentication.",
         },
         {
           status: 401,

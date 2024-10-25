@@ -22,12 +22,16 @@ export const sendUpdate = async ({
   storageRootFolder,
   rollbackEmbeddedFileName,
   rollbackFileName,
+  privateKeysFolder,
+  privateKeySuffix,
 }: {
   req: Request;
   bucket: any;
   storageRootFolder: string;
   rollbackEmbeddedFileName: string;
   rollbackFileName: string;
+  privateKeysFolder: string;
+  privateKeySuffix: string;
 }) => {
   const getTypeOfUpdate = (files: string[]) => {
     return initialGetTypeOfUpdate(files, {
@@ -93,9 +97,7 @@ export const sendUpdate = async ({
     projectName = req.headers.get("x-expo-up-name");
   } else {
     // log x-expo-up-name will be required in the future
-    console.warn(
-      "x-expo-up-name header will be required in the future."
-    )
+    console.warn("x-expo-up-name header will be required in the future.");
   }
 
   if (!updatesKey || typeof updatesKey !== "string") {
@@ -110,23 +112,6 @@ export const sendUpdate = async ({
   }
 
   const currentUpdateId = req.headers.get("expo-current-update-id");
-
-  // signature validation
-  let privateKey: string | null = null;
-  const expectSignatureHeader = req.headers.get("expo-expect-signature");
-
-  if (expectSignatureHeader) {
-    privateKey = await getPrivateKeyAsync();
-    if (!privateKey)
-      console.error("Code signing requested but no key supplied when starting server.");
-      return Response.json(
-        {
-          error:
-            "Code signing requested but no key supplied when starting server.",
-        },
-        { status: 500 }
-      );
-  }
 
   // create prefix
   let bucketPrefix: string;
@@ -145,6 +130,33 @@ export const sendUpdate = async ({
     bucketPrefix = `${storageRootFolder}/${projectName}-${updatesKey}-${platform}/${runtimeVersion}`;
   } else {
     bucketPrefix = `${storageRootFolder}/${updatesKey}-${platform}/${runtimeVersion}`;
+  }
+
+  // signature validation
+  let privateKey: string | null = null;
+  const expectSignatureHeader = req.headers.get("expo-expect-signature");
+
+  if (expectSignatureHeader) {
+    privateKey = await getPrivateKeyAsync({
+      bucket,
+      storageRootFolder,
+      updatesKey,
+      privateKeysFolder,
+      privateKeySuffix,
+      ...(projectName ? { projectName } : {}),
+    });
+    if (!privateKey) {
+      console.error(
+        "Code signing requested but no key supplied when starting server."
+      );
+      return Response.json(
+        {
+          error:
+            "Code signing requested but no key supplied when starting server.",
+        },
+        { status: 500 }
+      );
+    }
   }
 
   const [result] = await bucket.getFiles({
@@ -210,6 +222,11 @@ export const sendUpdate = async ({
         const expoConfigBuffer = expoConfigDownload;
         const expoConfigJson = JSON.parse(expoConfigBuffer.toString("utf-8"));
 
+        const hashInfoFile = bucket.file(`${updateBundlePrefix}/hashInfo.json`);
+        const [hashInfoDownload] = await hashInfoFile.download();
+        const hashInfoBuffer = hashInfoDownload;
+        const hashInfoJson = JSON.parse(hashInfoBuffer.toString("utf-8"));
+
         const platformSpecificMetadata =
           latestMetadata.json.fileMetadata[platform];
 
@@ -225,22 +242,30 @@ export const sendUpdate = async ({
           runtimeVersion,
           assets: await Promise.all(
             platformSpecificMetadata.assets.map(
-              (asset: { path: string; ext: string }) => {
+              async (asset: { path: string; ext: string }) => {
                 const assetFile = bucket.file(
                   `${updateBundlePrefix}/${asset.path}`
                 ) as FirebaseFileFunctions;
-                return getAssetAsync({
-                  assetFile,
-                  ext: asset.ext,
-                });
+                return {
+                  ...hashInfoJson[asset.path],
+                  ...(await getAssetAsync({
+                    assetFile,
+                    ext: asset.ext,
+                  })),
+                };
               }
             )
           ),
-          launchAsset: await getAssetAsync({
-            assetFile: launchAsset,
-          }),
+          launchAsset: {
+            ...hashInfoJson[platformSpecificMetadata.bundle],
+            ...(await getAssetAsync({
+              assetFile: launchAsset,
+            })),
+          },
           metadata: {
-            version: version ? parseInt(version, 10) : getLatestBundleVersionNumber(result),
+            version: version
+              ? parseInt(version, 10)
+              : getLatestBundleVersionNumber(result),
             bundleNumber: parseInt(bundleNumber, 10),
             type: updateType === UpdateType.ROLLBACK ? "rollback" : "update",
           },

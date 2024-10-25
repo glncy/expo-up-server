@@ -124,7 +124,10 @@ export const createHash = (
   hashingAlgorithm: string,
   encoding: BinaryToTextEncoding
 ) => {
-  return crypto.createHash(hashingAlgorithm).update(new Uint8Array(file)).digest(encoding);
+  return crypto
+    .createHash(hashingAlgorithm)
+    .update(new Uint8Array(file))
+    .digest(encoding);
 };
 
 export const convertSHA256HashToUUID = (value: string) => {
@@ -141,21 +144,14 @@ export const getAssetAsync = async ({
   assetFile: FirebaseFileFunctions;
   ext?: string;
 }) => {
-  const [download] = await assetFile.download();
   const [url] = await assetFile.getSignedUrl({
     action: "read",
     expires: Date.now() + 15 * 60 * 1000,
   });
-  const assetHash = getBase64URLEncoding(
-    createHash(download, "sha256", "base64")
-  );
-  const key = createHash(download, "md5", "hex");
   const keyExtensionSuffix = ext ? ext : "bundle";
   const contentType = ext ? mime.getType(ext) : "application/javascript";
 
   return {
-    hash: assetHash,
-    key,
     fileExtension: `.${keyExtensionSuffix}`,
     contentType,
     url,
@@ -173,19 +169,41 @@ export const generateToken = (length: number = 16) => {
   return crypto.randomBytes(length).toString("hex");
 };
 
-export const getPrivateKeyAsync = async () => {
-  // get private key based from project name and/or update key
-  const privateKeyPath = process.env.EXPO_UP_PRIVATE_KEY_PATH;
-  const privateKeyValue = process.env.EXPO_UP_PRIVATE_KEY_VALUE;
+export const getPrivateKeyAsync = async ({
+  bucket,
+  storageRootFolder,
+  updatesKey,
+  privateKeysFolder,
+  privateKeySuffix,
+  projectName,
+}: {
+  bucket: any;
+  storageRootFolder: string;
+  updatesKey: string;
+  privateKeysFolder: string;
+  privateKeySuffix: string;
+  projectName?: string;
+}) => {
+  try {
+    const bucketPrefix = `${storageRootFolder}/${privateKeysFolder}`;
+    let privateKeyFile: string;
+    if (projectName) {
+      // validate if projectName don't have white spaces or special characters
+      if (!/^[a-zA-Z0-9-]*$/.test(projectName as string)) {
+        return null;
+      }
+      privateKeyFile = `${projectName}-${updatesKey}${privateKeySuffix}`;
+    } else {
+      privateKeyFile = `${updatesKey}${privateKeySuffix}`;
+    }
 
-  if (privateKeyValue) {
-    return privateKeyValue;
-  } else if (privateKeyPath) {
-    const pemBuffer = await fs.readFile(path.resolve(privateKeyPath));
-    return pemBuffer.toString("utf8");
+    const privateKey = bucket.file(`${bucketPrefix}/${privateKeyFile}`);
+    const [privateKeyDownload] = await privateKey.download();
+    return privateKeyDownload.toString();
+  } catch (error) {
+    console.error(error);
+    return null;
   }
-
-  return null;
 };
 
 export const signRSASHA256 = (data: string, privateKey: string) => {
@@ -279,16 +297,17 @@ export const authenticate = async ({
 
     // get the private key
     const bucketPrefix = `${storageRootFolder}`;
-    const privateKeyFile = bucket.file(
-      `${bucketPrefix}/${privateKeyFileName}`
-    );
+    const privateKeyFile = bucket.file(`${bucketPrefix}/${privateKeyFileName}`);
     const [privateKeyFileDownload] = await privateKeyFile.download();
     const privateKey = privateKeyFileDownload.toString();
 
     // validate and decrypt text
     try {
       const result = crypto
-        .privateDecrypt(privateKey, new Uint8Array(Buffer.from(typeOrText, "base64")))
+        .privateDecrypt(
+          privateKey,
+          new Uint8Array(Buffer.from(typeOrText, "base64"))
+        )
         .toString("utf-8");
       console.log("Auth Info: ", JSON.parse(result));
       // TODO: validate the decrypted object
@@ -298,4 +317,4 @@ export const authenticate = async ({
       throw new UnauthorizedError();
     }
   }
-}
+};
