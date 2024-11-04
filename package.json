@@ -1,6 +1,6 @@
 {
   "name": "expo-up-server",
-  "version": "0.1.4",
+  "version": "0.2.0-alpha.2",
   "description": "Server Package for expo-up",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -26,6 +26,7 @@
     "crypto": "^1.0.1",
     "form-data": "^4.0.0",
     "jszip": "^3.10.1",
-    "mime": "^4.0.1"
+    "mime": "^4.0.1",
+    "structured-headers": "^1.0.1"
   }
 }

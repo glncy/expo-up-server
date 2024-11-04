@@ -11,6 +11,9 @@ import {
   convertSHA256HashToUUID,
   getAssetAsync,
   FirebaseFileFunctions,
+  getLatestBundleVersionNumber,
+  getPrivateKeyAsync,
+  generateSignature,
 } from "../helpers.js";
 
 export const sendUpdate = async ({
@@ -19,12 +22,16 @@ export const sendUpdate = async ({
   storageRootFolder,
   rollbackEmbeddedFileName,
   rollbackFileName,
+  privateKeysFolder,
+  privateKeySuffix,
 }: {
   req: Request;
   bucket: any;
   storageRootFolder: string;
   rollbackEmbeddedFileName: string;
   rollbackFileName: string;
+  privateKeysFolder: string;
+  privateKeySuffix: string;
 }) => {
   const getTypeOfUpdate = (files: string[]) => {
     return initialGetTypeOfUpdate(files, {
@@ -74,11 +81,29 @@ export const sendUpdate = async ({
     );
   }
 
-  const updatesKey = req.headers.get("x-expo-updates-key");
+  let updatesKey: string | null = null;
+  if (req.headers.get("x-expo-up-key")) {
+    updatesKey = req.headers.get("x-expo-up-key");
+  } else {
+    // log deprecated warning
+    console.warn(
+      "The x-expo-updates-key header is deprecated. It will be removed in a future release. Please use x-expo-up-key instead."
+    );
+    updatesKey = req.headers.get("x-expo-updates-key");
+  }
+
+  let projectName: string | null = null;
+  if (req.headers.get("x-expo-up-name")) {
+    projectName = req.headers.get("x-expo-up-name");
+  } else {
+    // log x-expo-up-name will be required in the future
+    console.warn("x-expo-up-name header will be required in the future.");
+  }
+
   if (!updatesKey || typeof updatesKey !== "string") {
     return Response.json(
       {
-        error: "No x-expo-updates-key provided.",
+        error: "No x-expo-up-key provided.",
       },
       {
         status: 400,
@@ -89,7 +114,50 @@ export const sendUpdate = async ({
   const currentUpdateId = req.headers.get("expo-current-update-id");
 
   // create prefix
-  const bucketPrefix = `${storageRootFolder}/${updatesKey}-${platform}/${runtimeVersion}`;
+  let bucketPrefix: string;
+  if (projectName) {
+    // validate if projectName don't have white spaces or special characters
+    if (!/^[a-zA-Z0-9-]*$/.test(projectName as string)) {
+      return Response.json(
+        {
+          error: "Invalid project name.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+    bucketPrefix = `${storageRootFolder}/${projectName}-${updatesKey}-${platform}/${runtimeVersion}`;
+  } else {
+    bucketPrefix = `${storageRootFolder}/${updatesKey}-${platform}/${runtimeVersion}`;
+  }
+
+  // signature validation
+  let privateKey: string | null = null;
+  const expectSignatureHeader = req.headers.get("expo-expect-signature");
+
+  if (expectSignatureHeader) {
+    privateKey = await getPrivateKeyAsync({
+      bucket,
+      storageRootFolder,
+      updatesKey,
+      privateKeysFolder,
+      privateKeySuffix,
+      ...(projectName ? { projectName } : {}),
+    });
+    if (!privateKey) {
+      console.error(
+        "Code signing requested but no key supplied when starting server."
+      );
+      return Response.json(
+        {
+          error:
+            "Code signing requested but no key supplied when starting server.",
+        },
+        { status: 500 }
+      );
+    }
+  }
 
   const [result] = await bucket.getFiles({
     prefix: bucketPrefix,
@@ -97,14 +165,20 @@ export const sendUpdate = async ({
   });
 
   if (result.length <= 0) {
-    return await putNoUpdateAvailableInResponseAsync(protocolVersion);
+    return await putNoUpdateAvailableInResponseAsync(
+      protocolVersion,
+      privateKey
+    );
   }
 
   // get latest update bundle
   const latestBundleString = getLatestBundleString(result);
 
   if (!latestBundleString) {
-    return await putNoUpdateAvailableInResponseAsync(protocolVersion);
+    return await putNoUpdateAvailableInResponseAsync(
+      protocolVersion,
+      privateKey
+    );
   }
 
   const latestBundlePrefix = `${bucketPrefix}/${latestBundleString}`;
@@ -148,6 +222,11 @@ export const sendUpdate = async ({
         const expoConfigBuffer = expoConfigDownload;
         const expoConfigJson = JSON.parse(expoConfigBuffer.toString("utf-8"));
 
+        const hashInfoFile = bucket.file(`${updateBundlePrefix}/hashInfo.json`);
+        const [hashInfoDownload] = await hashInfoFile.download();
+        const hashInfoBuffer = hashInfoDownload;
+        const hashInfoJson = JSON.parse(hashInfoBuffer.toString("utf-8"));
+
         const platformSpecificMetadata =
           latestMetadata.json.fileMetadata[platform];
 
@@ -155,27 +234,41 @@ export const sendUpdate = async ({
           `${updateBundlePrefix}/${platformSpecificMetadata.bundle}`
         ) as FirebaseFileFunctions;
 
+        const [bundleNumber, version] = latestBundleString.split("-v");
+
         const manifest = {
           id: convertSHA256HashToUUID(latestMetadata.id),
           createdAt: latestMetadata.createdAt,
           runtimeVersion,
           assets: await Promise.all(
             platformSpecificMetadata.assets.map(
-              (asset: { path: string; ext: string }) => {
+              async (asset: { path: string; ext: string }) => {
                 const assetFile = bucket.file(
                   `${updateBundlePrefix}/${asset.path}`
                 ) as FirebaseFileFunctions;
-                return getAssetAsync({
-                  assetFile,
-                  ext: asset.ext,
-                });
+                return {
+                  ...hashInfoJson[asset.path],
+                  ...(await getAssetAsync({
+                    assetFile,
+                    ext: asset.ext,
+                  })),
+                };
               }
             )
           ),
-          launchAsset: await getAssetAsync({
-            assetFile: launchAsset,
-          }),
-          metadata: {},
+          launchAsset: {
+            ...hashInfoJson[platformSpecificMetadata.bundle],
+            ...(await getAssetAsync({
+              assetFile: launchAsset,
+            })),
+          },
+          metadata: {
+            version: version
+              ? parseInt(version, 10)
+              : getLatestBundleVersionNumber(result),
+            bundleNumber: parseInt(bundleNumber, 10),
+            type: updateType === UpdateType.ROLLBACK ? "rollback" : "update",
+          },
           extra: {
             expoClient: expoConfigJson,
           },
@@ -186,11 +279,21 @@ export const sendUpdate = async ({
           assetRequestHeaders[asset.key] = {};
         });
 
+        let signature: string | null = null;
+        if (privateKey) {
+          const valueString = JSON.stringify(manifest);
+          signature = await generateSignature({
+            valueString,
+            privateKey,
+          });
+        }
+
         const form = new FormData();
         form.append("manifest", JSON.stringify(manifest), {
           contentType: "application/json",
           header: {
             "content-type": "application/json; charset=utf-8",
+            ...(signature ? { "expo-signature": signature } : {}),
           },
         });
         form.append("extensions", JSON.stringify({ assetRequestHeaders }), {
@@ -234,11 +337,21 @@ export const sendUpdate = async ({
           },
         };
 
+        let signature: string | null = null;
+        if (privateKey) {
+          const valueString = JSON.stringify(directive);
+          signature = await generateSignature({
+            valueString,
+            privateKey,
+          });
+        }
+
         const form = new FormData();
         form.append("directive", JSON.stringify(directive), {
           contentType: "application/json",
           header: {
             "content-type": "application/json; charset=utf-8",
+            ...(signature ? { "expo-signature": signature } : {}),
           },
         });
 
@@ -257,7 +370,10 @@ export const sendUpdate = async ({
       }
     } catch (maybeNoUpdateAvailableError) {
       if (maybeNoUpdateAvailableError instanceof NoUpdateAvailableError) {
-        return await putNoUpdateAvailableInResponseAsync(protocolVersion);
+        return await putNoUpdateAvailableInResponseAsync(
+          protocolVersion,
+          privateKey
+        );
       }
       throw maybeNoUpdateAvailableError;
     }
